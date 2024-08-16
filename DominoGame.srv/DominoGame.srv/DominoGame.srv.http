@@ -1,0 +1,6 @@
+@DominoGame.srv_HostAddress = http://localhost:5079
+
+GET {{DominoGame.srv_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
