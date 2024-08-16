@@ -1,5 +1,7 @@
 
 
+using Microsoft.OpenApi.Models;
+
 namespace DominoGame.srv
 {
     public class Program
@@ -14,21 +16,23 @@ namespace DominoGame.srv
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddCors(options =>
             {
-
-
                 options.AddPolicy("AllowAll",
                     b =>
                     {
                         b.SetIsOriginAllowed(origin => true);
                         b.AllowAnyMethod();
                         b.AllowAnyHeader();
-
                     }
                 );
 
             });
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(options =>
+            {
+                options.SwaggerDoc("v1", new OpenApiInfo { Title = "Some API v1", Version = "v1" });
+                // some other configs
+                options.AddSignalRSwaggerGen();
+            });
             builder.Services.AddSignalR();
             var app = builder.Build();
 
@@ -42,7 +46,7 @@ namespace DominoGame.srv
             app.UseHttpsRedirection();
 
             app.UseAuthorization();
-            app.MapHub<GameHub>("/gameHub").RequireCors("AllowAll");
+            app.MapHub<GameHub>("/gameHub").RequireCors("AllowAll").WithOpenApi();
 
             var summaries = new[]
             {

@@ -1,7 +1,9 @@
-﻿namespace DominoGame.srv.Hubs
+﻿using SignalRSwaggerGen.Attributes;
+
+namespace DominoGame.srv.Hubs
 {
 
-
+    [SignalRHub]
     public class GameHub : Hub
     {
         private static List<Game> games = new List<Game>();
