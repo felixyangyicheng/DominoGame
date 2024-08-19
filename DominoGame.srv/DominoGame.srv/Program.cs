@@ -54,7 +54,7 @@ namespace DominoGame.srv
             }
 
             app.UseHttpsRedirection();
-
+            app.UseCors("AllowAll");
             app.UseAuthorization();
             app.MapHub<GameHub>("/gameHub").RequireCors("AllowAll").WithOpenApi();
 
