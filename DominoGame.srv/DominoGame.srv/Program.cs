@@ -21,7 +21,7 @@ namespace DominoGame.srv
             });
 
             // Add services to the container.
-            builder.Services.AddAuthorization();
+            //builder.Services.AddAuthorization();
 
             // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
             builder.Services.AddCors(options =>
@@ -36,14 +36,15 @@ namespace DominoGame.srv
                 );
 
             });
-            builder.Services.AddEndpointsApiExplorer();
+			builder.Services.AddSignalR();
+
+			builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(options =>
             {
                 options.SwaggerDoc("v1", new OpenApiInfo { Title = "Some API v1", Version = "v1" });
                 // some other configs
                 options.AddSignalRSwaggerGen();
             });
-            builder.Services.AddSignalR();
             var app = builder.Build();
 
             // Configure the HTTP request pipeline.
@@ -51,9 +52,10 @@ namespace DominoGame.srv
                 app.UseSwagger();
                 app.UseSwaggerUI();
 
+			app.UseRouting();
 
-           // app.UseHttpsRedirection();
-            app.UseCors("AllowAll");
+			// app.UseHttpsRedirection();
+			app.UseCors("AllowAll");
             app.UseAuthorization();
             app.MapHub<GameHub>("/gamehub").RequireCors("AllowAll").WithOpenApi();
 
@@ -62,7 +64,7 @@ namespace DominoGame.srv
                 "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
             };
 
-            app.MapGet("/weatherforecast", (HttpContext httpContext) =>
+            app.MapGet("/", (HttpContext httpContext) =>
             {
                 var forecast = Enumerable.Range(1, 5).Select(index =>
                     new WeatherForecast
