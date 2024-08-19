@@ -3,12 +3,14 @@
 namespace DominoGame.srv.Hubs
 {
 
-    [SignalRHub]
     public class GameHub : Hub
     {
         private static List<Game> games = new List<Game>();
+		public GameHub()
+		{
 
-        public async Task CreateGame(string hostId, int numberOfPlayers, int numberOfRounds)
+		}
+		public async Task CreateGame(string hostId, int numberOfPlayers, int numberOfRounds)
         {
             var game = new Game
             {

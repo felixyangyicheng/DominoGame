@@ -11,20 +11,24 @@ namespace DominoGame.srv
         {
             var builder = WebApplication.CreateBuilder(args);
 
+#if DEBUG
+
+#else
             builder.WebHost.ConfigureKestrel((context, options) =>
             {
                 options.ListenAnyIP(80, listenOptions =>
                 {
                     listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
-  
+                    //listenOptions.UseHttps();
                 });
             });
+#endif
 
-            // Add services to the container.
-            //builder.Services.AddAuthorization();
+			// Add services to the container.
+			//builder.Services.AddAuthorization();
 
-            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-            builder.Services.AddCors(options =>
+			// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+			builder.Services.AddCors(options =>
             {
                 options.AddPolicy("AllowAll",
                     b =>
@@ -55,33 +59,13 @@ namespace DominoGame.srv
 			app.UseRouting();
 
 			// app.UseHttpsRedirection();
-			//app.UseCors("AllowAll");
+			app.UseCors("AllowAll");
             app.UseAuthorization();
-            app.MapHub<GameHub>("/gamehub")
-                //.RequireCors("AllowAll")
-                .WithOpenApi();
+            app.MapHub<GameHub>("/game")
+				.RequireCors("AllowAll")
+				;
 
-            var summaries = new[]
-            {
-                "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-            };
-
-            app.MapGet("/", (HttpContext httpContext) =>
-            {
-                var forecast = Enumerable.Range(1, 5).Select(index =>
-                    new WeatherForecast
-                    {
-                        Date = DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                        TemperatureC = Random.Shared.Next(-20, 55),
-                        Summary = summaries[Random.Shared.Next(summaries.Length)]
-                    })
-                    .ToArray();
-                return forecast;
-            })
-            .WithName("GetWeatherForecast")
-            .WithOpenApi();
-
-            app.Run();
+			app.Run();
         }
     }
 }
