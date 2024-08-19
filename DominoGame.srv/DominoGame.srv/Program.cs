@@ -1,5 +1,6 @@
 
 
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.OpenApi.Models;
 
 namespace DominoGame.srv
@@ -9,18 +10,16 @@ namespace DominoGame.srv
         public static void Main(string[] args)
         {
             var builder = WebApplication.CreateBuilder(args);
-#if DEBUG
 
-#else
             builder.WebHost.ConfigureKestrel((context, options) =>
             {
                 options.ListenAnyIP(80, listenOptions =>
                 {
                     listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
-                    //listenOptions.UseHttps();
+  
                 });
             });
-#endif
+
             // Add services to the container.
             builder.Services.AddAuthorization();
 
