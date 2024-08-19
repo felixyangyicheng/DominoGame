@@ -52,7 +52,7 @@ namespace DominoGame.srv
                 app.UseSwaggerUI();
 
 
-            app.UseHttpsRedirection();
+           // app.UseHttpsRedirection();
             app.UseCors("AllowAll");
             app.UseAuthorization();
             app.MapHub<GameHub>("/gamehub").RequireCors("AllowAll").WithOpenApi();
