@@ -1,30 +1,50 @@
-﻿using SignalRSwaggerGen.Attributes;
+﻿using DominoGame.srv.Models;
+using JiuLing.CommonLibs;
+using Microsoft.Extensions.Hosting;
+using SignalRSwaggerGen.Attributes;
+using System.Threading.Tasks;
 
 namespace DominoGame.srv.Hubs
 {
 
     public class GameHub : Hub
     {
-        private static List<Game> games = new List<Game>();
+		private static readonly object Locker = new();
+
+		private static List<Game> games = new List<Game>();
 		public GameHub()
 		{
 
+
 		}
-		public async Task CreateGame(string hostId, int numberOfPlayers, int numberOfRounds)
-        {
-            var game = new Game
+		[HubMethodName("CreateGame")]
+		public async Task<int> CreateGame( int numberOfPlayers, int numberOfRounds)
+		{
+			int hostId;
+            var game = new Game();
+			lock (Locker)
             {
-                HostId = hostId,
-                NumberOfPlayers = numberOfPlayers,
-                NumberOfRounds = numberOfRounds
-            };
 
-            games.Add(game);
-            await Groups.AddToGroupAsync(Context.ConnectionId, hostId);
+				do
+			    {
+				    hostId = Convert.ToInt32(RandomUtils.GetOneByLength(4));
+			    } while (games.Any(x => x.HostId == hostId));
+
+
+				game.HostId = hostId;
+				game. NumberOfPlayers = numberOfPlayers;
+				game.NumberOfRounds = numberOfRounds;
+			  
+			    games.Add(game);
+            }
+            await Groups.AddToGroupAsync(Context.ConnectionId, game.HostId.ToString());
             await Clients.Caller.SendAsync("GameCreated", game);
-        }
+			return hostId;
 
-        public async Task JoinGame(string playerId, string playerName, string hostId)
+		}
+		[HubMethodName("JoinGame")]
+
+		public async Task JoinGame(string playerId, string playerName, int hostId)
         {
             var game = games.FirstOrDefault(g => g.HostId == hostId);
             if (game != null && !game.IsFull)
@@ -36,7 +56,7 @@ namespace DominoGame.srv.Hubs
                 };
 
                 game.Players.Add(player);
-                await Groups.AddToGroupAsync(Context.ConnectionId, hostId);
+                await Groups.AddToGroupAsync(Context.ConnectionId, game.HostId.ToString());
 
                 await Clients.Caller.SendAsync("GameJoined", game);
 
@@ -62,10 +82,10 @@ namespace DominoGame.srv.Hubs
             }
 
             game.CurrentRound = 1;
-            await Clients.Group(game.HostId).SendAsync("GameStarted", game);
+            await Clients.Group(game.HostId.ToString()).SendAsync("GameStarted", game);
         }
 
-        private List<Domino> GenerateDominoes(int min, int max)
+		private List<Domino> GenerateDominoes(int min, int max)
         {
             var dominoes = new List<Domino>();
             for (int i = min; i <= max; i++)
@@ -77,86 +97,114 @@ namespace DominoGame.srv.Hubs
             }
             return dominoes;
         }
+		[HubMethodName("PlayDomino")]
+		public async Task PlayDomino(int hostId, string playerId, int value1, int value2)
+		{
+			var game = games.FirstOrDefault(g => g.HostId == hostId);
+			var player = game?.Players.FirstOrDefault(p => p.ConnectionId == playerId);
 
-        public async Task PlayDomino(string hostId, string playerId, int value1, int value2, bool toHead)
-        {
-            var game = games.FirstOrDefault(g => g.HostId == hostId);
-            var player = game?.Players.FirstOrDefault(p => p.ConnectionId == playerId);
+			if (game != null && player != null)
+			{
+				var domino = player.Hand.FirstOrDefault(d => (d.Value1 == value1 && d.Value2 == value2) || (d.Value1 == value2 && d.Value2 == value1));
 
-            if (game != null && player != null)
-            {
-                var domino = player.Hand.FirstOrDefault(d => (d.Value1 == value1 && d.Value2 == value2) || (d.Value1 == value2 && d.Value2 == value1));
+				if (domino != null)
+				{
+					var firstPlayableValue = GetLinkListFirstPlayableValue(game.Board);
+					var lastPlayableValue = GetLinkListLastPlayableValue(game.Board);
 
-                if (domino != null)
-                {
-                    bool canPlace = false;
+					var placed=	AddDomino(game,domino); // Place the domino on the board using the new logic
+					if (placed)
+					{
 
-                    if (toHead)
-                    {
-                        var headValue = game.Board.First.Value.Value1;
-                        if (domino.CanBePlacedNextTo(headValue))
-                        {
-                            if (domino.Value1 == headValue)
-                            {
-                                game.Board.AddFirst(domino);
-                            }
-                            else
-                            {
-                                game.Board.AddFirst(new Domino(domino.Value2, domino.Value1));
-                            }
-                            canPlace = true;
-                        }
-                    }
-                    else
-                    {
-                        var tailValue = game.Board.Last.Value.Value2;
-                        if (domino.CanBePlacedNextTo(tailValue))
-                        {
-                            if (domino.Value2 == tailValue)
-                            {
-                                game.Board.AddLast(domino);
-                            }
-                            else
-                            {
-                                game.Board.AddLast(new Domino(domino.Value2, domino.Value1));
-                            }
-                            canPlace = true;
-                        }
-                    }
+						player.Hand.Remove(domino);
+						await Clients.Group(hostId.ToString()).SendAsync("DominoPlayed", game, player, domino);
 
-                    if (canPlace)
-                    {
-                        player.Hand.Remove(domino);
-                        await Clients.Group(hostId).SendAsync("DominoPlayed", game, player, domino);
+						if (player.Hand.Count == 0)
+						{
+							player.Score += game.Players.Sum(p => p.Hand.Sum(d => d.TotalValue));
+							await Clients.Group(hostId.ToString()).SendAsync("RoundEnded", game, player);
 
-                        if (player.Hand.Count == 0)
-                        {
-                            player.Score += game.Players.Sum(p => p.Hand.Sum(d => d.TotalValue));
-                            await Clients.Group(hostId).SendAsync("RoundEnded", game, player);
+							if (game.CurrentRound < game.NumberOfRounds)
+							{
+								game.CurrentRound++;
+								await StartGame(game);
+							}
+							else
+							{
+								await Clients.Group(hostId.ToString()).SendAsync("GameEnded", game);
+							}
+						}
+					}
+					else
+					{
+						await Clients.Caller.SendAsync("InvalidMove", "You must skip your turn.");
+					}
+				}
+			}
+		}
 
-                            if (game.CurrentRound < game.NumberOfRounds)
-                            {
-                                game.CurrentRound++;
-                                await StartGame(game);
-                            }
-                            else
-                            {
-                                await Clients.Group(hostId).SendAsync("GameEnded", game);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+		private int? GetLinkListLastPlayableValue(LinkedList<Domino> board)
+		{
+			var firstDomino = board.Last?.Value;
+			var nextDomino = board.Last?.Previous?.Value;
+			if (firstDomino?.Value1 == nextDomino?.Value1 || firstDomino?.Value1 == nextDomino?.Value2)
+			{
+				return firstDomino?.Value2;
+			}
+			if (firstDomino?.Value2 == nextDomino?.Value1 || firstDomino?.Value2 == nextDomino?.Value2)
+			{
+				return firstDomino?.Value1;
+			}
+			return null;
+		}
 
-        public override async Task OnConnectedAsync()
+		private int? GetLinkListFirstPlayableValue(LinkedList<Domino> board)
+		{
+			var firstDomino = board.First?.Value;
+			var nextDomino = board.First?.Next?.Value;
+			if (firstDomino?.Value1 == nextDomino?.Value1 || firstDomino?.Value1 == nextDomino?.Value2)
+			{
+				return firstDomino?.Value2;
+			}
+			if (firstDomino?.Value2 == nextDomino?.Value1 || firstDomino?.Value2 == nextDomino?.Value2)
+			{
+				return firstDomino?.Value1;
+			}
+			return null;
+		}
+
+		private bool AddDomino( Game game,Domino domino)
+		{
+			bool result = false;
+		    int	placedOrder = game.Board.Count;
+				domino.PlaceOrder = placedOrder;
+
+			if (domino.Value1 == GetLinkListFirstPlayableValue(game.Board) || domino.Value2 == GetLinkListFirstPlayableValue(game.Board))
+			{
+				game.Board.AddFirst(domino);
+				result = true;
+			}
+			else if (domino.Value1 == GetLinkListLastPlayableValue(game.Board) || domino.Value2 == GetLinkListLastPlayableValue(game.Board))
+			{
+				game.Board.AddLast(domino);
+				result = true;
+
+			}
+
+			game.ValueFisrt = GetLinkListFirstPlayableValue(game.Board);
+			game.ValueLast = GetLinkListLastPlayableValue(game.Board);
+			return result;
+		}
+
+
+		public override async Task OnConnectedAsync()
         {
             await base.OnConnectedAsync();
         }
 
-        public override async Task OnDisconnectedAsync(Exception exception)
+        public override async Task OnDisconnectedAsync(Exception? exception)
         {
-            await base.OnDisconnectedAsync(exception);
+            await base.OnDisconnectedAsync(exception?? throw new ArgumentNullException());
         }
     }
 

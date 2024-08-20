@@ -4,6 +4,7 @@
     {
         public int Value1 { get; set; }
         public int Value2 { get; set; }
+        public int PlaceOrder { get; set; }
 
         public Domino(int value1, int value2)
         {
