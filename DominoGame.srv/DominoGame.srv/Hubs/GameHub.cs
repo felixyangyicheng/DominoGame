@@ -7,8 +7,22 @@ namespace DominoGame.srv.Hubs
 {
     public class GameHub : Hub
     {
-        private static readonly object Locker = new();
-        private static readonly List<Game> Games = new();
+        private static class Events
+        {
+            public const string GameCreated = "GameCreated";
+            public const string GameError = "GameError";
+            public const string GameJoined = "GameJoined";
+            public const string GameStarted = "GameStarted";
+            public const string GameUpdated = "GameUpdated";
+            public const string GameEnded = "GameEnded";
+            public const string InvalidMove = "InvalidMove";
+            public const string DominoPlayed = "DominoPlayed";
+            public const string TurnPassed = "TurnPassed";
+            public const string PlayerDisconnected = "PlayerDisconnected";
+        }
+
+        private static readonly Lock Locker = new();
+        private static readonly List<Game> Games = [];
 
         [HubMethodName("CreateGame")]
         public async Task<int> CreateGame(int numberOfPlayers, int maxPip)
@@ -23,6 +37,10 @@ namespace DominoGame.srv.Hubs
 
             lock (Locker)
             {
+                // 清理已结束超过5分钟的房间
+                var cutoff = DateTime.UtcNow.AddMinutes(-5);
+                Games.RemoveAll(g => g.EndedAt is not null && g.EndedAt < cutoff);
+
                 do
                 {
                     hostId = Convert.ToInt32(RandomUtils.GetOneByLength(4));
@@ -42,7 +60,7 @@ namespace DominoGame.srv.Hubs
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, game.HostId.ToString());
-            await Clients.Caller.SendAsync("GameCreated", game);
+            await Clients.Caller.SendAsync(Events.GameCreated, game);
             return hostId;
         }
 
@@ -59,41 +77,60 @@ namespace DominoGame.srv.Hubs
                 {
                     player = null;
                 }
-                else if (game.Status != "Waiting")
+                else if (game.Status != GameStatus.Waiting)
                 {
-                    player = game.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+                    // 游戏已开始：先按 ConnectionId 查，再按名字查（断线重连）
+                    player = game.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId)
+                             ?? game.Players.FirstOrDefault(p => p.Name == playerName.Trim());
+                    if (player is not null)
+                    {
+                        player.ConnectionId = Context.ConnectionId;
+                        player.IsConnected = true;
+                    }
                 }
                 else
                 {
-                    player = game.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
-                    if (player is null && !game.IsFull)
+                    // 检查名字是否已被占用
+                    if (!string.IsNullOrWhiteSpace(playerName) &&
+                        game.Players.Any(p => p.Name == playerName.Trim()))
                     {
-                        player = new Player
+                        player = null; // 名字重复，后续返回错误
+                    }
+                    else
+                    {
+                        player = game.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+                        if (player is null && !game.IsFull)
                         {
-                            ConnectionId = Context.ConnectionId,
-                            Name = string.IsNullOrWhiteSpace(playerName) ? $"Joueur {game.Players.Count + 1}" : playerName.Trim()
-                        };
-                        game.Players.Add(player);
+                            player = new Player
+                            {
+                                ConnectionId = Context.ConnectionId,
+                                Name = string.IsNullOrWhiteSpace(playerName) ? $"Joueur {game.Players.Count + 1}" : playerName.Trim()
+                            };
+                            game.Players.Add(player);
+                        }
                     }
                 }
             }
 
             if (game is null)
             {
-                await Clients.Caller.SendAsync("GameError", "Salle introuvable.");
+                await Clients.Caller.SendAsync(Events.GameError, "Salle introuvable.");
                 return;
             }
 
             if (player is null)
             {
-                await Clients.Caller.SendAsync("GameError", game.IsFull ? "La salle est deja pleine." : "La partie a deja commence.");
+                var error = game.Status != GameStatus.Waiting
+                    ? "La partie a deja commence."
+                    : (game.IsFull ? "La salle est deja pleine." : "Ce nom est deja pris.");
+                await Clients.Caller.SendAsync(Events.GameError, error);
                 return;
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, game.HostId.ToString());
-            await Clients.Group(game.HostId.ToString()).SendAsync("GameJoined", game);
+            await Clients.Group(game.HostId.ToString()).SendAsync(Events.GameJoined, game);
 
-            if (game.IsFull && game.Status == "Waiting")
+            if (game.IsFull && game.Status == GameStatus.Waiting)
             {
                 await StartGame(game);
             }
@@ -116,28 +153,44 @@ namespace DominoGame.srv.Hubs
         [HubMethodName("GetGame")]
         public async Task GetGame(int hostId)
         {
-            var game = Games.FirstOrDefault(g => g.HostId == hostId);
+            Game? game;
+
+            lock (Locker)
+            {
+                game = Games.FirstOrDefault(g => g.HostId == hostId);
+                if (game is not null)
+                {
+                    var player = game.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+                    if (player is null)
+                    {
+                        // 可能是重连后 ConnectionId 变了，尝试按旧连接恢复
+                        // 客户端应优先调用 JoinGame 传名字来重连
+                    }
+                }
+            }
+
             if (game is null)
             {
-                await Clients.Caller.SendAsync("GameError", "Salle introuvable.");
+                await Clients.Caller.SendAsync(Events.GameError, "Salle introuvable.");
                 return;
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, hostId.ToString());
-            await Clients.Caller.SendAsync("GameUpdated", game);
+            await Clients.Caller.SendAsync(Events.GameUpdated, game);
         }
 
         private async Task StartGame(Game game)
         {
             lock (Locker)
             {
-                var dominoes = GenerateDominoes(game.MaxPip)
-                    .OrderBy(_ => Random.Shared.Next())
-                    .ToList();
+                var dominoes = GenerateDominoes(game.MaxPip);
+                Random.Shared.Shuffle(
+                    System.Runtime.InteropServices
+                        .CollectionsMarshal.AsSpan(dominoes));
 
                 game.Board.Clear();
                 game.Statistics.Clear();
-                game.Status = "Playing";
+                game.Status = GameStatus.Playing;
                 game.CurrentPlayerIndex = 0;
                 game.ValueFirst = null;
                 game.ValueLast = null;
@@ -157,7 +210,7 @@ namespace DominoGame.srv.Hubs
                 game.BoneyardCount = dominoes.Count;
             }
 
-            await Clients.Group(game.HostId.ToString()).SendAsync("GameStarted", game);
+            await Clients.Group(game.HostId.ToString()).SendAsync(Events.GameStarted, game);
         }
 
         private MoveResult TryPlayDomino(int hostId, string? playerId, int value1, int value2, bool toHead)
@@ -205,17 +258,17 @@ namespace DominoGame.srv.Hubs
                 if (player.Hand.Count == 0)
                 {
                     EndGame(game, player, "main vide");
-                    return MoveResult.Success(game, "GameEnded");
+                    return MoveResult.Success(game, Events.GameEnded);
                 }
 
                 AdvanceTurn(game);
                 if (!AnyPlayerCanMove(game))
                 {
                     EndGame(game, GetBlockedWinner(game), "blocage");
-                    return MoveResult.Success(game, "GameEnded");
+                    return MoveResult.Success(game, Events.GameEnded);
                 }
 
-                return MoveResult.Success(game, "DominoPlayed", player, placedDomino);
+                return MoveResult.Success(game, Events.DominoPlayed, player, placedDomino);
             }
         }
 
@@ -242,10 +295,10 @@ namespace DominoGame.srv.Hubs
                 if (!AnyPlayerCanMove(game))
                 {
                     EndGame(game, GetBlockedWinner(game), "blocage");
-                    return MoveResult.Success(game, "GameEnded");
+                    return MoveResult.Success(game, Events.GameEnded);
                 }
 
-                return MoveResult.Success(game, "TurnPassed", player);
+                return MoveResult.Success(game, Events.TurnPassed, player);
             }
         }
 
@@ -257,7 +310,7 @@ namespace DominoGame.srv.Hubs
                 return MoveResult.Fail(null, "Salle introuvable.");
             }
 
-            if (game.Status != "Playing")
+            if (game.Status != GameStatus.Playing)
             {
                 return MoveResult.Fail(game, "La partie n'est pas en cours.");
             }
@@ -273,7 +326,7 @@ namespace DominoGame.srv.Hubs
                 return MoveResult.Fail(game, "Ce n'est pas votre tour.");
             }
 
-            return MoveResult.Success(game, "GameUpdated", player);
+            return MoveResult.Success(game, Events.GameUpdated, player);
         }
 
         private static Domino? BuildPlacedDomino(Game game, Domino domino, bool toHead)
@@ -347,7 +400,8 @@ namespace DominoGame.srv.Hubs
 
         private static void EndGame(Game game, Player winner, string reason)
         {
-            game.Status = "Ended";
+            game.Status = GameStatus.Ended;
+            game.EndedAt = DateTime.UtcNow;
             game.WinnerConnectionId = winner.ConnectionId;
             game.WinnerName = winner.Name;
             game.EndReason = reason;
@@ -358,22 +412,22 @@ namespace DominoGame.srv.Hubs
             game.Statistics = game.Players
                 .OrderBy(p => p.RemainingPips)
                 .ThenBy(p => p.Hand.Count)
-                .Select(p => new PlayerStatistic
-                {
-                    PlayerName = p.Name,
-                    Score = p.Score,
-                    RemainingDominoes = p.Hand.Count,
-                    RemainingPips = p.RemainingPips,
-                    PlayedCount = p.PlayedCount,
-                    PassedCount = p.PassedCount,
-                    IsWinner = p.ConnectionId == winner.ConnectionId
-                })
+                .Select(p => new PlayerStatistic(
+                    p.Name,
+                    p.Score,
+                    p.Hand.Count,
+                    p.RemainingPips,
+                    p.PlayedCount,
+                    p.PassedCount,
+                    p.ConnectionId == winner.ConnectionId
+                ))
                 .ToList();
         }
 
         private static List<Domino> GenerateDominoes(int maxPip)
         {
-            var dominoes = new List<Domino>();
+            var count = CountDominoes(maxPip);
+            List<Domino> dominoes = [with(capacity: count)];
             for (var i = 0; i <= maxPip; i++)
             {
                 for (var j = i; j <= maxPip; j++)
@@ -394,7 +448,7 @@ namespace DominoGame.srv.Hubs
         {
             if (result.Error is not null)
             {
-                await Clients.Caller.SendAsync("InvalidMove", result.Error);
+                await Clients.Caller.SendAsync(Events.InvalidMove, result.Error);
                 return;
             }
 
@@ -403,13 +457,13 @@ namespace DominoGame.srv.Hubs
                 return;
             }
 
-            if (result.EventName == "DominoPlayed")
+            if (result.EventName == Events.DominoPlayed)
             {
                 await Clients.Group(result.Game.HostId.ToString()).SendAsync(result.EventName, result.Game, result.Player, result.Domino);
                 return;
             }
 
-            if (result.EventName == "TurnPassed")
+            if (result.EventName == Events.TurnPassed)
             {
                 await Clients.Group(result.Game.HostId.ToString()).SendAsync(result.EventName, result.Game, result.Player);
                 return;
@@ -435,18 +489,18 @@ namespace DominoGame.srv.Hubs
 
             if (game is not null && disconnectedPlayer is not null)
             {
-                await Clients.Group(game.HostId.ToString()).SendAsync("PlayerDisconnected", disconnectedPlayer);
+                await Clients.Group(game.HostId.ToString()).SendAsync(Events.PlayerDisconnected, disconnectedPlayer);
             }
 
             await base.OnDisconnectedAsync(exception);
         }
 
-        private sealed class MoveResult
+        file sealed class MoveResult
         {
             public Game? Game { get; init; }
             public Player? Player { get; init; }
             public Domino? Domino { get; init; }
-            public string EventName { get; init; } = "GameUpdated";
+            public string EventName { get; init; } = Events.GameUpdated;
             public string? Error { get; init; }
 
             public static MoveResult Success(Game? game, string eventName, Player? player = null, Domino? domino = null)

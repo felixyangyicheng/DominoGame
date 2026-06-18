@@ -65,6 +65,8 @@ namespace DominoGame.srv
 				.RequireCors("AllowAll")
 				;
 
+            app.MapGet("/health", () => Results.Ok(new { status = "UP" }));
+
 			app.Run();
         }
     }

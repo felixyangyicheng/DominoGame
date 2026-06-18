@@ -4,7 +4,7 @@
     {
         public string ConnectionId { get; set; } = "";
         public string Name { get; set; } = "";
-        public List<Domino> Hand { get; set; } = new List<Domino>();
+        public List<Domino> Hand { get; set; } = [];
         public int Score { get; set; } = 0;
         public int PlayedCount { get; set; }
         public int PassedCount { get; set; }

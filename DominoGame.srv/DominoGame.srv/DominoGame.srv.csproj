@@ -4,17 +4,18 @@
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>preview</LangVersion>
     <UserSecretsId>c678e88a-48d8-4aae-a3bf-c483649a3b08</UserSecretsId>
     <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.OpenApi" Version="1.6.23" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.9.0" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.21.0" />
-    <PackageReference Include="SignalRSwaggerGen" Version="4.7.0" />
+    <PackageReference Include="SignalRSwaggerGen" Version="4.9.0" />
 	  <PackageReference Include="JiuLing.CommonLibs" Version="1.6.7" />
 
-	  <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.1" />
+	  <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.1" />
   </ItemGroup>
 
 </Project>
